@@ -3,10 +3,14 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +30,13 @@ const (
 
 // ServiceDef configures a managed service via explicit commands.
 type ServiceDef struct {
-	ID     string   `yaml:"id"`
-	Name   string   `yaml:"name"`
-	Start  []string `yaml:"start"`
-	Stop   []string `yaml:"stop"`
-	Status []string `yaml:"status,omitempty"` // exit code 0 ⇒ up (used when no health URL)
-	Health string   `yaml:"health,omitempty"` // URL probe; status < 400 ⇒ up (authoritative if set)
+	ID         string   `yaml:"id"`
+	Name       string   `yaml:"name"`
+	Start      []string `yaml:"start"`
+	Stop       []string `yaml:"stop"`
+	Status     []string `yaml:"status,omitempty"`      // exit code 0 ⇒ up (used when no other probe)
+	StatusJSON []string `yaml:"status_json,omitempty"` // JSON output; "running" + live pid ⇒ up
+	Health     string   `yaml:"health,omitempty"`      // URL probe; status < 400 ⇒ up (authoritative if set)
 }
 
 // ServiceView is the JSON representation sent to the dashboard.
@@ -90,12 +95,15 @@ func (s *Service) Snapshot() ServiceView {
 	}
 }
 
-func (s *Service) hasProbe() bool { return len(s.def.Status) > 0 || s.def.Health != "" }
+func (s *Service) hasProbe() bool {
+	return len(s.def.Status) > 0 || len(s.def.StatusJSON) > 0 || s.def.Health != ""
+}
 
 // probeUp reports whether the service currently looks healthy. A configured
 // health URL is authoritative when present (an HTTP answer or a connection
-// refusal is definitive); otherwise the status command's exit code decides,
-// since some CLIs exit 0 even when their target is down.
+// refusal is definitive); next, a status_json command's JSON output decides;
+// otherwise the plain status command's exit code is used — which some CLIs
+// get wrong by exiting 0 even when their target is down.
 func (s *Service) probeUp() bool {
 	if s.def.Health != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -109,12 +117,56 @@ func (s *Service) probeUp() bool {
 		}
 		return false
 	}
+	if len(s.def.StatusJSON) > 0 {
+		return s.probeStatusJSON()
+	}
 	if len(s.def.Status) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		return exec.CommandContext(ctx, s.def.Status[0], s.def.Status[1:]...).Run() == nil
 	}
 	return false
+}
+
+// probeStatusJSON runs a status command that prints JSON and ignores its exit
+// code (lms exits 0 whether or not the daemon is up). The service is up when
+// the reported status is "running" and, if a PID comes with it, that process
+// is actually alive.
+func (s *Service) probeStatusJSON() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := runCmd(ctx, s.def.StatusJSON)
+	if err != nil {
+		return false
+	}
+	// The CLI may interleave log lines with the JSON; isolate the object.
+	b := []byte(out)
+	start, end := bytes.IndexByte(b, '{'), bytes.LastIndexByte(b, '}')
+	if start < 0 || end <= start {
+		return false
+	}
+	var st struct {
+		Status string `json:"status"`
+		PID    int    `json:"pid"`
+	}
+	if json.Unmarshal(b[start:end+1], &st) != nil || st.Status != "running" {
+		return false
+	}
+	return processAlive(st.PID)
+}
+
+// processAlive reports whether a process with the given PID exists. On Linux
+// it checks /proc; elsewhere the check is skipped and the JSON verdict stands
+// alone.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "linux" {
+		_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+		return err == nil
+	}
+	return true
 }
 
 // Start launches the service. It is idempotent: a service that is already up

@@ -12,7 +12,9 @@ services:
     name: LM Studio Daemon
     start: ["/home/medidew/.lmstudio/bin/lms", "daemon", "up"]
     stop:  ["/home/medidew/.lmstudio/bin/lms", "daemon", "down"]
-    status: ["/home/medidew/.lmstudio/bin/lms", "daemon", "status"]
+    # lms exits 0 whether or not the daemon is up, so probe its JSON output
+    # ("status":"running" plus a live PID) instead of the exit code.
+    status_json: ["/home/medidew/.lmstudio/bin/lms", "daemon", "status", "--json"]
 
   - id: lm-server
     name: LM Studio Server
