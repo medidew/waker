@@ -17,7 +17,8 @@ import (
 // Client targets the local LM Studio server.
 type Client struct {
 	base  string
-	httpc *http.Client
+	httpc *http.Client // short ops (model list): hard cap keeps polls snappy
+	slowc *http.Client // long ops (load/unload): bounded only by the request context
 }
 
 // New creates a client for the LM Studio server on localhost:port.
@@ -28,6 +29,7 @@ func New(port int) *Client {
 	return &Client{
 		base:  fmt.Sprintf("http://127.0.0.1:%d", port),
 		httpc: &http.Client{Timeout: 8 * time.Second},
+		slowc: &http.Client{}, // no Timeout: loading a big model can take minutes
 	}
 }
 
@@ -85,10 +87,12 @@ func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error
 	return nil, fmt.Errorf("GET %s: unrecognized response shape", path)
 }
 
-// Load loads a model into the running server (POST /api/v1/models/load).
+// Load loads a model into the running server (POST /api/v1/models/load). The
+// endpoint stays open until loading finishes, so this uses the long-lived
+// client; the caller's context is the only bound.
 func (c *Client) Load(ctx context.Context, model string) error {
 	payload, _ := json.Marshal(map[string]string{"model": model})
-	resp, err := c.postJSON(ctx, "/api/v1/models/load", payload)
+	resp, err := c.postLong(ctx, "/api/v1/models/load", payload)
 	if err != nil {
 		return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 	}
@@ -113,7 +117,7 @@ func (c *Client) Unload(ctx context.Context) error {
 			continue
 		}
 		payload, _ := json.Marshal(map[string]string{"instance_id": m.ID})
-		resp, err := c.postJSON(ctx, "/api/v1/models/unload", payload)
+		resp, err := c.postLong(ctx, "/api/v1/models/unload", payload)
 		if err != nil {
 			return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 		}
@@ -128,10 +132,20 @@ func (c *Client) Unload(ctx context.Context) error {
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	return c.postWith(ctx, path, body, c.httpc)
+}
+
+// postLong is like postJSON but uses the client without a short global
+// timeout, for operations that can legitimately take minutes.
+func (c *Client) postLong(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	return c.postWith(ctx, path, body, c.slowc)
+}
+
+func (c *Client) postWith(ctx context.Context, path string, body []byte, hc *http.Client) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return c.httpc.Do(req)
+	return hc.Do(req)
 }

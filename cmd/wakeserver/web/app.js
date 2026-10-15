@@ -3,6 +3,7 @@
 const DEFAULT_POLL_MS = 4000; // used until the first /api/status tells us poll_ms
 const FAST_POLL_MS = 2000;    // short-cadence polling right after user actions
 const FAST_POLL_WINDOW_MS = 40000; // max duration of fast-polling after an action
+const LOAD_TIMEOUT_MS = 35000;     // max time the UI waits for a model load request
 let pollMs = DEFAULT_POLL_MS;
 const WAKE_TIMEOUT_MS = 120000; // must match wakeserver wakeTimeout + staleWindow
 
@@ -31,10 +32,19 @@ function saveToken() {
 /* ---------- API ---------- */
 
 async function api(path, opts = {}) {
-  const res = await fetch("/api" + path, {
-    ...opts,
-    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) },
-  });
+  const ctrl = new AbortController();
+  if (opts.timeoutMs > 0) setTimeout(() => ctrl.abort(), opts.timeoutMs); // aborting after completion is a no-op
+  let res;
+  try {
+    res = await fetch("/api" + path, {
+      ...opts,
+      signal: ctrl.signal,
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) },
+    });
+  } catch (e) {
+    if (ctrl.signal.aborted) { const t = new Error("request timed out"); t.name = "TimeoutError"; throw t; }
+    throw e;
+  }
   if (res.status === 401) { showGate(); $("#gate-msg").classList.remove("hidden"); throw new Error("unauthorized"); }
   return res;
 }
@@ -277,10 +287,13 @@ $("#load-btn").addEventListener("click", async () => {
   setModelMsg(`Loading ${model}…`);
   fastPollUntil = Date.now() + FAST_POLL_WINDOW_MS; // track load progress at a quick cadence
   try {
-    const res = await api("/desktop/api/models/load", { method: "POST", body: JSON.stringify({ model }) });
+    const res = await api("/desktop/api/models/load", { method: "POST", body: JSON.stringify({ model }), timeoutMs: LOAD_TIMEOUT_MS });
     if (!res.ok) setModelMsg((await res.json()).error || "load failed");
     else setModelMsg(`Loading ${model} — give it a moment, then check back.`);
-  } catch (e) {}
+  } catch (e) {
+    // The agent keeps the load going after we stop waiting; polling shows it once done.
+    if (e.name === "TimeoutError") setModelMsg("Still loading in the background — check back in a moment.");
+  }
   setTimeout(refreshModels, 3000);
 });
 
