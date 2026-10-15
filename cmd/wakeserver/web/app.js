@@ -2,6 +2,7 @@
 
 const DEFAULT_POLL_MS = 4000; // used until the first /api/status tells us poll_ms
 const FAST_POLL_MS = 2000;    // short-cadence polling right after user actions
+const FAST_POLL_WINDOW_MS = 40000; // max duration of fast-polling after an action
 let pollMs = DEFAULT_POLL_MS;
 const WAKE_TIMEOUT_MS = 120000; // must match wakeserver wakeTimeout + staleWindow
 
@@ -181,8 +182,14 @@ async function svcAction(id, action, card) {
   try {
     await api(`/desktop/api/services/${encodeURIComponent(id)}/${action}`, { method: "POST" });
   } catch (e) { /* surfaced on next poll */ }
-  fastPollUntil = Date.now() + 60000; // track starting/stopping/failed transitions quickly
+  fastPollUntil = Date.now() + FAST_POLL_WINDOW_MS; // track starting/stopping/failed transitions quickly
   poll();
+}
+
+let lastModelKey = null; // fingerprint of the rendered list; skip re-render when unchanged
+
+function modelFingerprint(models) {
+  return models.map((m) => m.id + ":" + (m.state === "loaded" ? 1 : 0)).join("|");
 }
 
 async function refreshModels() {
@@ -198,7 +205,12 @@ async function refreshModels() {
   } catch (e) { return; }
   $("#model-card").classList.remove("hidden");
 
+  const key = modelFingerprint(models);
+  if (key === lastModelKey) return; // list unchanged: keep options and the user's selection
+  lastModelKey = key;
+
   const sel = $("#model-select");
+  const prev = sel.value;
   sel.innerHTML = "";
   for (const m of models) {
     const opt = document.createElement("option");
@@ -208,6 +220,7 @@ async function refreshModels() {
     opt.textContent = label;
     sel.appendChild(opt);
   }
+  if (models.some((m) => m.id === prev)) sel.value = prev; // preserve selection across real changes
   const loaded = models.find((m) => m.state === "loaded");
   $("#loaded-chip").textContent = loaded ? `Loaded: ${loaded.id}` : "No model loaded";
 }
@@ -262,7 +275,7 @@ $("#load-btn").addEventListener("click", async () => {
   const model = $("#model-select").value;
   if (!model) return;
   setModelMsg(`Loading ${model}…`);
-  fastPollUntil = Date.now() + 120000; // loading a big model can take minutes
+  fastPollUntil = Date.now() + FAST_POLL_WINDOW_MS; // track load progress at a quick cadence
   try {
     const res = await api("/desktop/api/models/load", { method: "POST", body: JSON.stringify({ model }) });
     if (!res.ok) setModelMsg((await res.json()).error || "load failed");
@@ -273,7 +286,7 @@ $("#load-btn").addEventListener("click", async () => {
 
 $("#unload-btn").addEventListener("click", async () => {
   setModelMsg("Unloading…");
-  fastPollUntil = Date.now() + 60000;
+  fastPollUntil = Date.now() + FAST_POLL_WINDOW_MS;
   try {
     const res = await api("/desktop/api/models/unload", { method: "POST" });
     if (!res.ok) setModelMsg((await res.json()).error || "unload failed");
