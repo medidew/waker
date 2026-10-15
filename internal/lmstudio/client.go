@@ -88,14 +88,14 @@ func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error
 // Load loads a model into the running server.
 func (c *Client) Load(ctx context.Context, model string) error {
 	payload, _ := json.Marshal(map[string]string{"model": model})
-	resp, err := c.postJSON(ctx, "/api/v0/load", payload)
+	resp, err := c.postJSON(ctx, "/api/v1/load", payload)
 	if err != nil {
 		return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("POST /api/v0/load: status %d", resp.StatusCode)
+		return fmt.Errorf("POST /api/v1/load: status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -105,7 +105,7 @@ func (c *Client) Load(ctx context.Context, model string) error {
 func (c *Client) Unload(ctx context.Context) error {
 	var lastErr error
 	for _, method := range []string{"DELETE", "POST"} {
-		req, err := http.NewRequestWithContext(ctx, method, c.base+"/api/v0/unload", nil)
+		req, err := http.NewRequestWithContext(ctx, method, c.base+"/api/v1/unload", nil)
 		if err != nil {
 			lastErr = err
 			continue
@@ -120,7 +120,7 @@ func (c *Client) Unload(ctx context.Context) error {
 		if resp.StatusCode < 300 {
 			return nil
 		}
-		lastErr = fmt.Errorf("%s /api/v0/unload: status %d", method, resp.StatusCode)
+		lastErr = fmt.Errorf("%s /api/v1/unload: status %d", method, resp.StatusCode)
 	}
 	return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", lastErr)
 }
