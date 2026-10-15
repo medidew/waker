@@ -20,6 +20,7 @@ $("#token-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sa
 function saveToken() {
   token = $("#token-input").value.trim();
   localStorage.setItem("waker.token", token);
+  $("#gate-msg").classList.add("hidden");
   $("#token-gate").classList.add("hidden");
   poll(true);
 }
@@ -31,8 +32,18 @@ async function api(path, opts = {}) {
     ...opts,
     headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) },
   });
-  if (res.status === 401) { showGate(); throw new Error("unauthorized"); }
+  if (res.status === 401) { showGate(); $("#gate-msg").classList.remove("hidden"); throw new Error("unauthorized"); }
   return res;
+}
+
+function setConnError(detail) {
+  const pill = $("#presence");
+  pill.classList.remove("online");
+  pill.classList.add("offline");
+  $("#desktop-name").textContent = detail === "auth" ? "token rejected" : "unreachable";
+  $("#wake-subtitle").textContent = detail === "auth"
+    ? "The server rejected the access token — re-enter it in the dialog."
+    : "Cannot reach the waker API (" + detail + "). Check that wakeserver is running.";
 }
 
 /* ---------- polling & rendering ---------- */
@@ -41,9 +52,12 @@ async function poll() {
   let st;
   try {
     const res = await api("/status");
-    if (!res.ok) return;
+    if (!res.ok) { setConnError("http " + res.status); return; }
     st = await res.json();
-  } catch (e) { return; }
+  } catch (e) {
+    setConnError(e && e.message === "unauthorized" ? "auth" : String((e && e.message) || e));
+    return;
+  }
   lastStatus = st;
 
   renderPresence(st);
@@ -210,7 +224,12 @@ function renderSSH(d) {
   const btn = document.createElement("button");
   btn.className = "copy-btn";
   btn.textContent = "copy";
-  btn.onclick = () => { navigator.clipboard.writeText(`ssh ${user}${d.hostname}`).then(() => { btn.textContent = "copied!"; setTimeout(() => (btn.textContent = "copy"), 1200); });
+  btn.onclick = () => {
+    navigator.clipboard.writeText(`ssh ${user}${d.hostname}`).then(() => {
+      btn.textContent = "copied!";
+      setTimeout(() => (btn.textContent = "copy"), 1200);
+    });
+  };
   line.appendChild(btn);
   line.classList.remove("hidden");
 }
