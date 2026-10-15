@@ -65,6 +65,9 @@ func main() {
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
+		for _, svc := range services {
+			svc.Watch() // converge state with reality on every poll, not just the watch tick
+		}
 		httpx.WriteJSON(w, map[string]any{
 			"system":   agent.Collect(r.Context()),
 			"services": snapshots(services),

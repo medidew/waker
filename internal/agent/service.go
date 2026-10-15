@@ -30,8 +30,8 @@ type ServiceDef struct {
 	Name   string   `yaml:"name"`
 	Start  []string `yaml:"start"`
 	Stop   []string `yaml:"stop"`
-	Status []string `yaml:"status,omitempty"` // exit code 0 ⇒ up
-	Health string   `yaml:"health,omitempty"` // URL probe; status < 400 ⇒ up
+	Status []string `yaml:"status,omitempty"` // exit code 0 ⇒ up (used when no health URL)
+	Health string   `yaml:"health,omitempty"` // URL probe; status < 400 ⇒ up (authoritative if set)
 }
 
 // ServiceView is the JSON representation sent to the dashboard.
@@ -92,17 +92,13 @@ func (s *Service) Snapshot() ServiceView {
 
 func (s *Service) hasProbe() bool { return len(s.def.Status) > 0 || s.def.Health != "" }
 
-// probeUp reports whether the service currently looks healthy.
+// probeUp reports whether the service currently looks healthy. A configured
+// health URL is authoritative when present (an HTTP answer or a connection
+// refusal is definitive); otherwise the status command's exit code decides,
+// since some CLIs exit 0 even when their target is down.
 func (s *Service) probeUp() bool {
-	if len(s.def.Status) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if err := exec.CommandContext(ctx, s.def.Status[0], s.def.Status[1:]...).Run(); err == nil {
-			return true
-		}
-	}
 	if s.def.Health != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, "GET", s.def.Health, nil)
 		resp, err := http.DefaultClient.Do(req)
@@ -111,18 +107,22 @@ func (s *Service) probeUp() bool {
 			resp.Body.Close()
 			return resp.StatusCode < 400
 		}
+		return false
+	}
+	if len(s.def.Status) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, s.def.Status[0], s.def.Status[1:]...).Run() == nil
 	}
 	return false
 }
 
-// Start launches the service. It returns once the start command has been
-// issued; state transitions to running/failed as probes confirm it.
+// Start launches the service. It is idempotent: a service that is already up
+// (possibly started outside the dashboard) is simply reported as running.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.state == StateRunning || s.state == StateStarting {
-		st := s.state
-		s.mu.Unlock()
-		return fmt.Errorf("service is already %s", st)
+		return nil // nothing to do
 	}
 	s.setStateLocked(StateStarting, "")
 	s.mu.Unlock()
@@ -131,6 +131,10 @@ func (s *Service) Start(ctx context.Context) error {
 	out, err := runCmd(cmdCtx, s.def.Start)
 	cancel()
 	if err != nil {
+		if s.probeUp() {
+			s.setState(StateRunning, "") // already up; the command was a no-op
+			return nil
+		}
 		s.setState(StateFailed, "start command failed: "+tail(out))
 		return fmt.Errorf("start failed: %s", tail(out))
 	}
@@ -156,13 +160,13 @@ func (s *Service) waitUp(timeout time.Duration) {
 	}
 }
 
-// Stop halts the service.
+// Stop halts the service. It is idempotent: stopping a service that is
+// already down (e.g. stopped outside the dashboard) succeeds and converges
+// the state instead of surfacing an error.
 func (s *Service) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	if s.state == StateStopped || s.state == StateStopping {
-		st := s.state
-		s.mu.Unlock()
-		return fmt.Errorf("service is already %s", st)
+		return nil // nothing to do
 	}
 	s.setStateLocked(StateStopping, "")
 	s.mu.Unlock()
@@ -171,6 +175,10 @@ func (s *Service) Stop(ctx context.Context) error {
 	out, err := runCmd(cmdCtx, s.def.Stop)
 	cancel()
 	if err != nil {
+		if !s.probeUp() {
+			s.setState(StateStopped, "") // already down; converge silently
+			return nil
+		}
 		s.setState(StateFailed, "stop command failed: "+tail(out))
 		return fmt.Errorf("stop failed: %s", tail(out))
 	}
