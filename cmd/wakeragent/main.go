@@ -32,11 +32,12 @@ type lmConfig struct {
 }
 
 type config struct {
-	Listen       string             `yaml:"listen"`        // "" or "auto" → primary tailnet IP
-	Token        string             `yaml:"token"`         // shared bearer token
-	StartTimeout time.Duration      `yaml:"start_timeout"` // how long to wait for a service to come up
-	LMStudio     lmConfig           `yaml:"lmstudio"`
-	Services     []agent.ServiceDef `yaml:"services"`
+	Listen         string             `yaml:"listen"`          // "" or "auto" → primary tailnet IP
+	Token          string             `yaml:"token"`           // shared bearer token
+	StartTimeout   time.Duration      `yaml:"start_timeout"`   // how long to wait for a service to come up
+	HealthInterval time.Duration      `yaml:"health_interval"` // how often running services are probed
+	LMStudio       lmConfig           `yaml:"lmstudio"`
+	Services       []agent.ServiceDef `yaml:"services"`
 }
 
 func main() {
@@ -61,7 +62,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go watchLoop(ctx, services)
+	go watchLoop(ctx, services, cfg.HealthInterval)
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
@@ -158,8 +159,8 @@ func main() {
 	}
 }
 
-func watchLoop(ctx context.Context, services map[string]*agent.Service) {
-	ticker := time.NewTicker(5 * time.Second)
+func watchLoop(ctx context.Context, services map[string]*agent.Service, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -200,6 +201,9 @@ func loadConfig(path string) (*config, error) {
 	}
 	if cfg.StartTimeout <= 0 {
 		cfg.StartTimeout = 30 * time.Second
+	}
+	if cfg.HealthInterval <= 0 {
+		cfg.HealthInterval = 30 * time.Second
 	}
 	return &cfg, nil
 }

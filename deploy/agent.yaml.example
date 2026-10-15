@@ -1,7 +1,8 @@
-# ~/.config/waker/agent.yaml — on the desktop (CachyOS)
+# ~/.config/waker/agent.yaml — on the desktop
 listen: auto            # bind primary tailnet IP :8091
 token: CHANGE_ME        # same token as server.yaml
 start_timeout: 30s
+health_interval: 30s
 
 lmstudio:
   port: 1234
@@ -19,4 +20,4 @@ services:
     start: ["/home/medidew/.lmstudio/bin/lms", "server", "start", "--bind", "0.0.0.0"]
     stop:  ["/home/medidew/.lmstudio/bin/lms", "server", "stop"]
     status: ["/home/medidew/.lmstudio/bin/lms", "server", "status"]
-    health: http://127.0.0.1:1234/api/v0/models
+    health: http://127.0.0.1:1234/health
