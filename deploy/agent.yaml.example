@@ -22,3 +22,21 @@ services:
     stop:  ["/home/medidew/.lmstudio/bin/lms", "server", "stop"]
     status: ["/home/medidew/.lmstudio/bin/lms", "server", "status"]
     health: http://127.0.0.1:1234/health
+
+  # System-wide unit: the agent runs as a user service, so system units need
+  # sudo — add a narrow NOPASSWD rule in /etc/sudoers.d/waker for exactly
+  # these commands (validate with `sudo visudo -cf`).
+  - id: openwebui
+    name: Open WebUI
+    start: ["sudo", "systemctl", "start", "open-webui.service"]
+    stop:  ["sudo", "systemctl", "stop", "open-webui.service"]
+    status: ["sudo", "systemctl", "is-active", "open-webui.service"]
+    health: http://127.0.0.1:8080/
+
+  # User unit: systemctl --user works directly (the agent shares the user).
+  - id: comfyui
+    name: ComfyUI
+    start: ["systemctl", "--user", "start", "comfyui.service"]
+    stop:  ["systemctl", "--user", "stop", "comfyui.service"]
+    status: ["systemctl", "--user", "is-active", "comfyui.service"]
+    health: http://127.0.0.1:8188/

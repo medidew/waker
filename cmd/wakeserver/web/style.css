@@ -164,6 +164,27 @@ main {
 }
 .link-list a:hover { border-color: var(--accent); }
 
+/* Links bound to a managed service: status dot + start/stop control */
+.link-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: #0e1520;
+  border: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.link-row a { color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-row .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); flex-shrink: 0; }
+.link-row.state-running .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.link-row.state-starting .dot, .link-row.state-stopping .dot { background: var(--amber); }
+.link-row.state-failed .dot { background: var(--red); }
+.link-row .btn.small { padding: 6px 12px; font-size: 0.8rem; flex-shrink: 0; }
+.link-row .hint { flex-basis: 100%; margin: 2px 0 0; font-size: 0.75rem; color: var(--red); word-break: break-word; }
+
 .ssh { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .copy-btn { padding: 3px 10px; font-size: 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: #1a2436; color: var(--muted); cursor: pointer; }
 

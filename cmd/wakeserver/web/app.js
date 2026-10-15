@@ -11,6 +11,7 @@ let token = localStorage.getItem("waker.token") || "";
 let desktopOnline = false;
 let lastStatus = null;
 let wakeDeadline = 0; // epoch ms when the current wake attempt times out locally
+let desktopServices = []; // latest service snapshot from the agent (for link status dots)
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -86,7 +87,9 @@ async function poll() {
       if (dres.ok) {
         const d = await dres.json();
         renderSystem(d.system || {});
-        renderServices(d.services || []);
+        desktopServices = d.services || [];
+        renderServices(desktopServices);
+        renderLinks(st.links || []); // re-render bound links with fresh service states
         $("#system-card").classList.remove("hidden");
         $("#services-card").classList.remove("hidden");
         refreshModels();
@@ -94,6 +97,7 @@ async function poll() {
     } catch (e) { /* agent briefly unreachable; retry next poll */ }
   } else {
     desktopOnline = false;
+    desktopServices = [];
     hideDesktopPanels();
   }
   updateWakeUI(st);
@@ -239,12 +243,44 @@ function renderLinks(links) {
   const el = $("#links");
   el.innerHTML = "";
   for (const l of links) {
+    const svc = l.service ? desktopServices.find((s) => s.id === l.service) : null;
+    if (!svc) { // plain link, or bound service while the desktop is offline
+      const a = document.createElement("a");
+      a.href = l.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = l.name;
+      el.appendChild(a);
+      continue;
+    }
+    const row = document.createElement("div");
+    row.className = "link-row state-" + svc.state;
+
+    const dot = document.createElement("span");
+    dot.className = "dot";
+
     const a = document.createElement("a");
     a.href = l.url;
     a.target = "_blank";
     a.rel = "noopener";
     a.textContent = l.name;
-    el.appendChild(a);
+
+    const btn = document.createElement("button");
+    btn.className = "btn small";
+    if (svc.can_start) { btn.textContent = "Start"; btn.onclick = () => svcAction(svc.id, "start", row); }
+    else if (svc.can_stop) { btn.textContent = "Stop"; btn.onclick = () => svcAction(svc.id, "stop", row); }
+    else { btn.disabled = true; btn.textContent = STATE_LABEL[svc.state] || ""; }
+
+    row.appendChild(dot);
+    row.appendChild(a);
+    row.appendChild(btn);
+    if (svc.hint) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = svc.hint;
+      row.appendChild(hint);
+    }
+    el.appendChild(row);
   }
 }
 

@@ -38,8 +38,9 @@ const (
 var webFS embed.FS
 
 type link struct {
-	Name string `yaml:"name" json:"name"`
-	URL  string `yaml:"url"  json:"url"`
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url"  json:"url"`
+	Service string `yaml:"service,omitempty" json:"service,omitempty"` // optional: bind to a managed desktop service id
 }
 
 type desktopCfg struct {

@@ -17,4 +17,7 @@ presence_interval: 5s   # tailscale presence check cadence AND dashboard poll pe
 
 links:
   - { name: "LM Studio", url: "http://100.88.33.77:1234" }
-  # - { name: "Open WebUI", url: "https://100.127.248.50" }
+  # A link can bind to a managed desktop service (by id from agent.yaml):
+  # the row then shows a live status dot plus Start/Stop buttons.
+  - { name: "Open WebUI", url: "https://openwebui.taild83b61.ts.net/", service: openwebui }
+  - { name: "ComfyUI", url: "https://comfyui.taild83b61.ts.net/", service: comfyui }
