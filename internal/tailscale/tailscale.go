@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -64,10 +66,15 @@ func (n *Node) matches(hostname string) bool {
 	return ShortName(n.DNSName) == ShortName(hostname)
 }
 
-// Tracker polls tailscale and tracks the presence of a single peer.
+// Tracker polls tailscale and tracks the presence of a single peer. A node is
+// considered online only when Tailscale lists it as connected AND its agent
+// answers directly: a machine that sleeps without a clean disconnect can stay
+// "online" in tailscale status for minutes, which would mislead the dashboard
+// and block Wake-on-LAN during exactly the window it is needed.
 type Tracker struct {
-	hostname string // FQDN or short name of the node to watch
-	interval time.Duration
+	hostname  string // FQDN or short name of the node to watch
+	interval  time.Duration
+	agentPort int // wakeragent port on the desktop, probed for reachability
 
 	mu         sync.RWMutex
 	online     bool
@@ -78,11 +85,12 @@ type Tracker struct {
 }
 
 // NewTracker creates a tracker for hostname with the given poll interval.
-func NewTracker(hostname string, interval time.Duration) *Tracker {
+// agentPort is the desktop's wakeragent port, used to verify reachability.
+func NewTracker(hostname string, interval time.Duration, agentPort int) *Tracker {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	return &Tracker{hostname: hostname, interval: interval}
+	return &Tracker{hostname: hostname, interval: interval, agentPort: agentPort}
 }
 
 // Start begins polling in the background; it stops when ctx is cancelled.
@@ -118,7 +126,6 @@ func (t *Tracker) poll() {
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if found == nil {
 		if !t.missLogged {
 			names := make([]string, 0, len(st.Peer))
@@ -131,18 +138,46 @@ func (t *Tracker) poll() {
 		}
 		t.wasFound = false
 		t.online = false
+		t.mu.Unlock()
 		return
 	}
 	t.missLogged = false
 	t.wasFound = true
-	if found.Online != t.online {
-		log.Printf("waker: desktop %s is now %s", t.hostname, map[bool]string{true: "online", false: "offline"}[found.Online])
-	}
-	t.online = found.Online
 	t.lastSeen = found.LastSeen
 	if ip := firstIPv4(found.TailscaleIPs); ip != "" {
 		t.ip = ip // tailnet IPs are stable per node; never clear once known
 	}
+	ip, tsOnline := t.ip, found.Online
+	t.mu.Unlock()
+
+	reachable := false
+	if tsOnline && ip != "" {
+		reachable = probeHealth(context.Background(), ip, t.agentPort)
+	}
+	online := tsOnline && reachable
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if online != t.online {
+		log.Printf("waker: desktop %s is now %s", t.hostname, map[bool]string{true: "online", false: "offline"}[online])
+	}
+	t.online = online
+}
+
+// probeHealth checks whether the desktop agent answers on its tailnet address.
+// A refused or timed-out connection means the machine is asleep (or the agent
+// is down), even if Tailscale still lists it as online.
+func probeHealth(ctx context.Context, ip string, port int) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(ip, strconv.Itoa(port)) + "/healthz")
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	return resp.StatusCode < 400
 }
 
 // Online reports whether the watched node is currently online.

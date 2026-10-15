@@ -86,7 +86,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tracker := tailscale.NewTracker(cfg.Desktop.Hostname, cfg.PresenceInterval)
+	tracker := tailscale.NewTracker(cfg.Desktop.Hostname, cfg.PresenceInterval, cfg.AgentPort)
 	tracker.Start(ctx)
 
 	s := &server{cfg: *cfg, tracker: tracker, started: time.Now()}
