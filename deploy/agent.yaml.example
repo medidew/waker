@@ -6,7 +6,6 @@ health_interval: 30s
 
 lmstudio:
   port: 1234
-  lms_bin: /home/medidew/.lmstudio/bin/lms   # full path so it works from systemd
 
 services:
   - id: lm-daemon

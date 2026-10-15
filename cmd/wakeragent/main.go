@@ -27,8 +27,7 @@ import (
 const defaultPort = 8091
 
 type lmConfig struct {
-	Port   int    `yaml:"port"`    // LM Studio local server port
-	LMSBin string `yaml:"lms_bin"` // path to the lms CLI
+	Port int `yaml:"port"` // LM Studio local server port
 }
 
 type config struct {
@@ -57,7 +56,7 @@ func main() {
 		}
 		services[def.ID] = agent.NewService(def, cfg.StartTimeout)
 	}
-	lmsc := lmstudio.New(cfg.LMStudio.Port, cfg.LMStudio.LMSBin)
+	lmsc := lmstudio.New(cfg.LMStudio.Port)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

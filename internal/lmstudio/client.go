@@ -1,5 +1,7 @@
-// Package lmstudio talks to a local LM Studio instance over its HTTP API,
-// falling back to the lms CLI where useful.
+// Package lmstudio talks to a local LM Studio instance over its HTTP API.
+// All operations require the server to be running; there is deliberately no
+// lms CLI fallback, because CLI commands can start the daemon as a side
+// effect — a passive model-list poll must never resurrect services.
 package lmstudio
 
 import (
@@ -9,30 +11,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"strings"
 	"time"
 )
 
-// Client targets a local LM Studio server and its lms CLI.
+// Client targets the local LM Studio server.
 type Client struct {
-	base   string
-	httpc  *http.Client
-	lmsBin string
+	base  string
+	httpc *http.Client
 }
 
 // New creates a client for the LM Studio server on localhost:port.
-func New(port int, lmsBin string) *Client {
+func New(port int) *Client {
 	if port <= 0 {
 		port = 1234
 	}
-	if lmsBin == "" {
-		lmsBin = "lms"
-	}
 	return &Client{
-		base:   fmt.Sprintf("http://127.0.0.1:%d", port),
-		httpc:  &http.Client{Timeout: 8 * time.Second},
-		lmsBin: lmsBin,
+		base:  fmt.Sprintf("http://127.0.0.1:%d", port),
+		httpc: &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
@@ -46,8 +41,8 @@ type Model struct {
 	MaxContext   int    `json:"max_context_length,omitempty"`
 }
 
-// Models lists available models. Prefers the local API (which also reports
-// which model is loaded), falling back to parsing `lms ls`.
+// Models lists available models via the local API. Returns an error if the
+// server is not reachable instead of falling back to the CLI.
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	var lastErr error
 	for _, path := range []string{"/api/v0/models", "/v1/models"} {
@@ -57,11 +52,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 		}
 		lastErr = err
 	}
-	models, cliErr := c.modelsViaCLI(ctx)
-	if cliErr != nil {
-		return nil, fmt.Errorf("local API: %v; lms ls: %w", lastErr, cliErr)
-	}
-	return models, nil
+	return nil, fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", lastErr)
 }
 
 func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error) {
@@ -94,65 +85,34 @@ func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error
 	return nil, fmt.Errorf("GET %s: unrecognized response shape", path)
 }
 
-func (c *Client) modelsViaCLI(ctx context.Context) ([]Model, error) {
-	out, err := runOutput(ctx, c.lmsBin, "ls")
-	if err != nil {
-		return nil, err
-	}
-	var models []Model
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "IDENTIFIER") || strings.HasPrefix(line, "---") {
-			continue
-		}
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
-		}
-		id := f[0]
-		if !strings.Contains(id, "/") && !strings.ContainsAny(id, ".-") {
-			continue // header or junk row
-		}
-		models = append(models, Model{ID: id})
-	}
-	return models, nil
-}
-
-// Load loads a model into the running server. Tries the API first, then CLI.
+// Load loads a model into the running server.
 func (c *Client) Load(ctx context.Context, model string) error {
 	payload, _ := json.Marshal(map[string]string{"model": model})
-	var apiErr error
-	resp, doErr := c.postJSON(ctx, "/api/v0/load", payload)
-	if doErr != nil {
-		apiErr = doErr
-	} else if resp.StatusCode >= 300 {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		apiErr = fmt.Errorf("status %d", resp.StatusCode)
+	resp, err := c.postJSON(ctx, "/api/v0/load", payload)
+	if err != nil {
+		return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 	}
-	if apiErr == nil {
-		return nil
-	}
-	out, cliErr := runOutput(ctx, c.lmsBin, "load", model)
-	if cliErr != nil {
-		return fmt.Errorf("api: %v; lms load: %s (%v)", apiErr, tail(out), cliErr)
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("POST /api/v0/load: status %d", resp.StatusCode)
 	}
 	return nil
 }
 
-// Unload removes the current model from memory. Tries API endpoints first,
-// then the CLI.
+// Unload removes the current model from memory. Tries DELETE then POST on
+// /api/v0/unload (endpoint method varies by LM Studio version).
 func (c *Client) Unload(ctx context.Context) error {
-	var apiErr error
+	var lastErr error
 	for _, method := range []string{"DELETE", "POST"} {
 		req, err := http.NewRequestWithContext(ctx, method, c.base+"/api/v0/unload", nil)
 		if err != nil {
-			apiErr = err
+			lastErr = err
 			continue
 		}
 		resp, doErr := c.httpc.Do(req)
 		if doErr != nil {
-			apiErr = doErr
+			lastErr = doErr
 			continue
 		}
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -160,13 +120,9 @@ func (c *Client) Unload(ctx context.Context) error {
 		if resp.StatusCode < 300 {
 			return nil
 		}
-		apiErr = fmt.Errorf("%s /api/v0/unload: status %d", method, resp.StatusCode)
+		lastErr = fmt.Errorf("%s /api/v0/unload: status %d", method, resp.StatusCode)
 	}
-	out, cliErr := runOutput(ctx, c.lmsBin, "unload")
-	if cliErr != nil {
-		return fmt.Errorf("api: %v; lms unload: %s (%v)", apiErr, tail(out), cliErr)
-	}
-	return nil
+	return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", lastErr)
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, body []byte) (*http.Response, error) {
@@ -176,26 +132,4 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) (*http.
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return c.httpc.Do(req)
-}
-
-func runOutput(ctx context.Context, argv ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		return buf.String(), err
-	}
-	return buf.String(), nil
-}
-
-func tail(s string) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " | "))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	if s == "" {
-		return "(no output)"
-	}
-	return s
 }
