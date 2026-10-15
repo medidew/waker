@@ -197,7 +197,9 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"server": map[string]any{
 			"uptime_sec": time.Since(s.started).Seconds(),
 		},
-		"links": s.cfg.Links,
+		// The dashboard uses this as its own poll period.
+		"poll_ms": int64(s.cfg.PresenceInterval / time.Millisecond),
+		"links":   s.cfg.Links,
 	})
 }
 

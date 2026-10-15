@@ -13,7 +13,7 @@ wake:
   interval_ms: 1000
 
 agent_port: 8091
-presence_interval: 5s
+presence_interval: 5s   # tailscale presence check cadence AND dashboard poll period
 
 links:
   - { name: "LM Studio", url: "http://100.88.33.77:1234" }

@@ -1,6 +1,7 @@
 "use strict";
 
-const POLL_MS = 4000;
+const DEFAULT_POLL_MS = 4000; // used until the first /api/status tells us poll_ms
+let pollMs = DEFAULT_POLL_MS;
 const WAKE_TIMEOUT_MS = 120000; // must match wakeserver wakeTimeout + staleWindow
 
 let token = localStorage.getItem("waker.token") || "";
@@ -59,6 +60,7 @@ async function poll() {
     return;
   }
   lastStatus = st;
+  if (st.poll_ms > 0) pollMs = Math.max(2000, Number(st.poll_ms));
 
   renderPresence(st);
   renderLinks(st.links || []);
@@ -185,7 +187,12 @@ async function refreshModels() {
   let models = [];
   try {
     const res = await api("/desktop/api/models");
-    if (res.ok) models = (await res.json()).models || [];
+    if (!res.ok) {
+      setModelMsg((await res.json()).error || "model list unavailable");
+      $("#model-card").classList.remove("hidden");
+      return;
+    }
+    models = (await res.json()).models || [];
   } catch (e) { return; }
   $("#model-card").classList.remove("hidden");
 
@@ -275,9 +282,14 @@ function setModelMsg(msg) { $("#model-msg").textContent = msg; if (msg) setTimeo
 
 /* ---------- boot ---------- */
 
+let pollTimer = null;
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => { await poll(); schedulePoll(); }, pollMs);
+}
+
 if (!token) showGate();
-poll();
-setInterval(poll, POLL_MS);
+schedulePoll();
 setInterval(tickTimer, 1000); // keep the wake timer ticking between polls
 
 if ("serviceWorker" in navigator) {
