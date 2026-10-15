@@ -16,7 +16,7 @@ import (
 
 // Node is the subset of a tailscale peer/self entry we care about.
 type Node struct {
-	Name         string     `json:"Name"`
+	HostName     string     `json:"HostName"`
 	DNSName      string     `json:"DNSName"`
 	TailscaleIPs []string   `json:"TailscaleIPs"`
 	Online       bool       `json:"Online"`
@@ -24,9 +24,11 @@ type Node struct {
 }
 
 // Status is the subset of `tailscale status --json` output we parse.
+// Current tailscale versions expose peers as a map keyed by node key under
+// "Peer"; Self is an object, not a string.
 type Status struct {
-	Peers []Node `json:"Peers"`
-	Self  Node   `json:"Self"` // an object in recent tailscale versions
+	Peer map[string]Node `json:"Peer"`
+	Self Node            `json:"Self"`
 }
 
 // RunStatus executes `tailscale status --json` and parses it.
@@ -53,15 +55,26 @@ func ShortName(name string) string {
 	return name
 }
 
+// matches reports whether the node is the one identified by hostname
+// (FQDN or short name).
+func (n *Node) matches(hostname string) bool {
+	if n.HostName != "" && n.HostName == hostname {
+		return true
+	}
+	return ShortName(n.DNSName) == ShortName(hostname)
+}
+
 // Tracker polls tailscale and tracks the presence of a single peer.
 type Tracker struct {
 	hostname string // FQDN or short name of the node to watch
 	interval time.Duration
 
-	mu       sync.RWMutex
-	online   bool
-	lastSeen *time.Time
-	ip       string
+	mu         sync.RWMutex
+	online     bool
+	lastSeen   *time.Time
+	ip         string
+	wasFound   bool
+	missLogged bool
 }
 
 // NewTracker creates a tracker for hostname with the given poll interval.
@@ -96,20 +109,34 @@ func (t *Tracker) poll() {
 		return // keep last known state
 	}
 	var found *Node
-	for i := range st.Peers {
-		p := &st.Peers[i]
-		if p.Name == t.hostname ||
-			ShortName(p.Name) == ShortName(t.hostname) ||
-			ShortName(p.DNSName) == ShortName(t.hostname) {
-			found = p
+	for _, p := range st.Peer {
+		p := p
+		if p.matches(t.hostname) {
+			found = &p
 			break
 		}
 	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if found == nil {
+		if !t.missLogged {
+			names := make([]string, 0, len(st.Peer))
+			for _, p := range st.Peer {
+				names = append(names, ShortName(p.DNSName))
+			}
+			log.Printf("waker: desktop %q not found among tailnet peers (%s)",
+				t.hostname, strings.Join(names, ", "))
+			t.missLogged = true
+		}
+		t.wasFound = false
 		t.online = false
 		return
+	}
+	t.missLogged = false
+	t.wasFound = true
+	if found.Online != t.online {
+		log.Printf("waker: desktop %s is now %s", t.hostname, map[bool]string{true: "online", false: "offline"}[found.Online])
 	}
 	t.online = found.Online
 	t.lastSeen = found.LastSeen
