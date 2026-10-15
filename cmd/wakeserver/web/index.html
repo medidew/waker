@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Waker</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b0f14">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/icon.svg" alt="" width="26" height="26"><span>Waker</span></div>
+  <div id="presence" class="pill offline"><span class="dot"></span><span id="desktop-name">connecting…</span></div>
+</header>
+
+<main>
+  <section class="card wake-card">
+    <h2>Desktop</h2>
+    <p id="wake-subtitle" class="muted">Checking presence…</p>
+    <button id="wake-btn" class="wake-btn" disabled>Wake desktop</button>
+    <div id="wake-timer" class="timer hidden"></div>
+  </section>
+
+  <section id="system-card" class="card hidden">
+    <h2>System</h2>
+    <div id="sys-stats" class="stat-grid"></div>
+  </section>
+
+  <section id="services-card" class="card hidden">
+    <h2>Services</h2>
+    <div id="services" class="service-list"></div>
+  </section>
+
+  <section id="model-card" class="card hidden">
+    <h2>Model</h2>
+    <p id="loaded-chip" class="muted">No model loaded</p>
+    <select id="model-select" class="select"></select>
+    <div class="btn-row">
+      <button id="load-btn" class="btn primary">Load selected</button>
+      <button id="unload-btn" class="btn">Unload current</button>
+    </div>
+    <p id="model-msg" class="msg"></p>
+  </section>
+
+  <section class="card">
+    <h2>Links</h2>
+    <div id="links" class="link-list"></div>
+    <p id="ssh-line" class="muted ssh hidden"></p>
+  </section>
+</main>
+
+<div id="token-gate" class="gate hidden">
+  <div class="gate-box">
+    <h2>Waker</h2>
+    <p class="muted">Enter the access token from your waker config.</p>
+    <input id="token-input" type="password" placeholder="access token" autocomplete="off" spellcheck="false">
+    <button id="token-btn" class="btn primary">Unlock</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

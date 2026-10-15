@@ -1,0 +1,20 @@
+# /etc/waker/server.yaml — on the always-on box
+listen: auto            # bind primary tailnet IP :8090 (or e.g. "127.0.0.1:8090" + tailscale serve)
+token: CHANGE_ME        # openssl rand -hex 16
+
+desktop:
+  mac: "AA:BB:CC:DD:EE:FF"   # TODO: desktop NIC MAC (ip link on the desktop)
+  hostname: medidewpc       # tailnet node name of the desktop (`tailscale status`)
+  ssh_user: medidew
+
+wake:
+  target: "192.168.1.255:9"  # LAN broadcast address
+  count: 5
+  interval_ms: 1000
+
+agent_port: 8091
+presence_interval: 5s
+
+links:
+  - { name: "LM Studio", url: "http://100.88.33.77:1234" }
+  # - { name: "Open WebUI", url: "https://100.127.248.50" }
