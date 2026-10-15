@@ -49,28 +49,31 @@ func main() {
 	}
 
 	services := make(map[string]*agent.Service, len(cfg.Services))
+	var ordered []*agent.Service // config order; map iteration is random and must not leak into the API
 	for _, def := range cfg.Services {
 		if def.ID == "" {
 			log.Printf("wakeragent: skipping service with empty id")
 			continue
 		}
-		services[def.ID] = agent.NewService(def, cfg.StartTimeout)
+		svc := agent.NewService(def, cfg.StartTimeout)
+		services[def.ID] = svc
+		ordered = append(ordered, svc)
 	}
 	lmsc := lmstudio.New(cfg.LMStudio.Port)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go watchLoop(ctx, services, cfg.HealthInterval)
+	go watchLoop(ctx, ordered, cfg.HealthInterval)
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
-		for _, svc := range services {
+		for _, svc := range ordered {
 			svc.Watch() // converge state with reality on every poll, not just the watch tick
 		}
 		httpx.WriteJSON(w, map[string]any{
 			"system":   agent.Collect(r.Context()),
-			"services": snapshots(services),
+			"services": snapshots(ordered),
 		})
 	})
 	api.HandleFunc("POST /api/services/{id}/start", func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +164,7 @@ func main() {
 	}
 }
 
-func watchLoop(ctx context.Context, services map[string]*agent.Service, interval time.Duration) {
+func watchLoop(ctx context.Context, services []*agent.Service, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -176,7 +179,7 @@ func watchLoop(ctx context.Context, services map[string]*agent.Service, interval
 	}
 }
 
-func snapshots(services map[string]*agent.Service) []agent.ServiceView {
+func snapshots(services []*agent.Service) []agent.ServiceView {
 	out := make([]agent.ServiceView, 0, len(services))
 	for _, svc := range services {
 		out = append(out, svc.Snapshot())
