@@ -1,6 +1,7 @@
 "use strict";
 
 const DEFAULT_POLL_MS = 4000; // used until the first /api/status tells us poll_ms
+const FAST_POLL_MS = 2000;    // short-cadence polling right after user actions
 let pollMs = DEFAULT_POLL_MS;
 const WAKE_TIMEOUT_MS = 120000; // must match wakeserver wakeTimeout + staleWindow
 
@@ -60,7 +61,7 @@ async function poll() {
     return;
   }
   lastStatus = st;
-  if (st.poll_ms > 0) pollMs = Math.max(2000, Number(st.poll_ms));
+  if (st.poll_ms > 0) pollMs = Math.max(FAST_POLL_MS, Number(st.poll_ms));
 
   renderPresence(st);
   renderLinks(st.links || []);
@@ -180,6 +181,7 @@ async function svcAction(id, action, card) {
   try {
     await api(`/desktop/api/services/${encodeURIComponent(id)}/${action}`, { method: "POST" });
   } catch (e) { /* surfaced on next poll */ }
+  fastPollUntil = Date.now() + 60000; // track starting/stopping/failed transitions quickly
   poll();
 }
 
@@ -260,6 +262,7 @@ $("#load-btn").addEventListener("click", async () => {
   const model = $("#model-select").value;
   if (!model) return;
   setModelMsg(`Loading ${model}…`);
+  fastPollUntil = Date.now() + 120000; // loading a big model can take minutes
   try {
     const res = await api("/desktop/api/models/load", { method: "POST", body: JSON.stringify({ model }) });
     if (!res.ok) setModelMsg((await res.json()).error || "load failed");
@@ -270,6 +273,7 @@ $("#load-btn").addEventListener("click", async () => {
 
 $("#unload-btn").addEventListener("click", async () => {
   setModelMsg("Unloading…");
+  fastPollUntil = Date.now() + 60000;
   try {
     const res = await api("/desktop/api/models/unload", { method: "POST" });
     if (!res.ok) setModelMsg((await res.json()).error || "unload failed");
@@ -283,9 +287,18 @@ function setModelMsg(msg) { $("#model-msg").textContent = msg; if (msg) setTimeo
 /* ---------- boot ---------- */
 
 let pollTimer = null;
+let fastPollUntil = 0; // epoch ms until which we poll at FAST_POLL_MS
+
+function currentInterval() {
+  const now = Date.now();
+  if (now < fastPollUntil) return FAST_POLL_MS;
+  const waking = !desktopOnline && ((lastStatus && lastStatus.waking && lastStatus.waking.active) || wakeDeadline > now);
+  return waking ? FAST_POLL_MS : pollMs;
+}
+
 function schedulePoll() {
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(async () => { await poll(); schedulePoll(); }, pollMs);
+  pollTimer = setTimeout(async () => { await poll(); schedulePoll(); }, currentInterval());
 }
 
 if (!token) showGate();

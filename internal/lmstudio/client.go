@@ -85,44 +85,46 @@ func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error
 	return nil, fmt.Errorf("GET %s: unrecognized response shape", path)
 }
 
-// Load loads a model into the running server.
+// Load loads a model into the running server (POST /api/v1/models/load).
 func (c *Client) Load(ctx context.Context, model string) error {
 	payload, _ := json.Marshal(map[string]string{"model": model})
-	resp, err := c.postJSON(ctx, "/api/v1/load", payload)
+	resp, err := c.postJSON(ctx, "/api/v1/models/load", payload)
 	if err != nil {
 		return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("POST /api/v1/load: status %d", resp.StatusCode)
+		return fmt.Errorf("POST /api/v1/models/load: status %d", resp.StatusCode)
 	}
 	return nil
 }
 
-// Unload removes the current model from memory. Tries DELETE then POST on
-// /api/v0/unload (endpoint method varies by LM Studio version).
+// Unload removes the currently loaded model from memory. It first lists
+// models to find which one is loaded, then POSTs its id as instance_id to
+// /api/v1/models/unload.
 func (c *Client) Unload(ctx context.Context) error {
-	var lastErr error
-	for _, method := range []string{"DELETE", "POST"} {
-		req, err := http.NewRequestWithContext(ctx, method, c.base+"/api/v1/unload", nil)
+	models, err := c.Models(ctx)
+	if err != nil {
+		return err
+	}
+	for _, m := range models {
+		if m.State != "loaded" {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]string{"instance_id": m.ID})
+		resp, err := c.postJSON(ctx, "/api/v1/models/unload", payload)
 		if err != nil {
-			lastErr = err
-			continue
+			return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", err)
 		}
-		resp, doErr := c.httpc.Do(req)
-		if doErr != nil {
-			lastErr = doErr
-			continue
-		}
+		defer resp.Body.Close()
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
 		if resp.StatusCode < 300 {
 			return nil
 		}
-		lastErr = fmt.Errorf("%s /api/v1/unload: status %d", method, resp.StatusCode)
+		return fmt.Errorf("POST /api/v1/models/unload: status %d", resp.StatusCode)
 	}
-	return fmt.Errorf("LM Studio server unreachable: %v (start the LM Studio Server service)", lastErr)
+	return fmt.Errorf("no model is currently loaded")
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, body []byte) (*http.Response, error) {

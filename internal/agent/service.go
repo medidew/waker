@@ -49,10 +49,11 @@ type Service struct {
 	def          ServiceDef
 	startTimeout time.Duration
 
-	mu        sync.Mutex
-	state     State
-	hint      string
-	changedAt time.Time
+	mu         sync.Mutex
+	state      State
+	hint       string
+	changedAt  time.Time
+	downStreak int // consecutive failed probes while running
 }
 
 // NewService creates a Service, initializing its state from an immediate probe.
@@ -177,18 +178,29 @@ func (s *Service) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Watch detects a service that died after it was running. Call periodically.
+// Watch converges the tracked state with reality: a stopped or failed service
+// that is now up (e.g. started outside the dashboard) is promoted to running,
+// and a running service that no longer responds is marked failed after two
+// consecutive missed probes (one miss can be a transient busy/timeout).
 func (s *Service) Watch() {
 	if !s.hasProbe() {
 		return
 	}
+	up := s.probeUp()
 	s.mu.Lock()
-	st := s.state
-	s.mu.Unlock()
-	if st != StateRunning || s.probeUp() {
-		return
+	defer s.mu.Unlock()
+	switch {
+	case up:
+		s.downStreak = 0
+		if s.state == StateStopped || s.state == StateFailed || s.state == StateUnknown {
+			s.setStateLocked(StateRunning, "")
+		}
+	case s.state == StateRunning:
+		s.downStreak++
+		if s.downStreak >= 2 {
+			s.setStateLocked(StateFailed, "was running but no longer responds")
+		}
 	}
-	s.setState(StateFailed, "was running but no longer responds")
 }
 
 func (s *Service) setState(st State, hint string) {
