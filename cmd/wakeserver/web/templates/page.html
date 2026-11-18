@@ -1,0 +1,128 @@
+{{define "page"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Waker</title>
+<meta http-equiv="refresh" content="{{.RefreshSec}}">
+<meta name="theme-color" content="#0b0f14">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/icon.svg" alt="" width="26" height="26"><span>Waker</span></div>
+  <div class="pill {{if .Online}}online{{else}}offline{{end}}"><span class="dot"></span><span>{{.DesktopName}} · {{if .Online}}online{{else}}offline{{end}}</span></div>
+</header>
+
+<main>
+  <section class="card wake-card">
+    <h2>Desktop</h2>
+    <p id="wake-subtitle" class="muted">
+      {{if .Online}}Desktop is awake.{{else if .Waking}}Waiting for the desktop to join the tailnet — {{mss .WakeSeconds}} in, can take up to ~2 minutes.{{else}}Sends a Wake-on-LAN packet and waits for it to come online.{{end}}
+    </p>
+    <form method="post" action="/wake">
+      <button class="wake-btn" {{if or .Online .Waking}}disabled{{end}}>
+        {{if .Online}}● Online{{else if .Waking}}Waking…{{else}}Wake desktop{{end}}
+      </button>
+    </form>
+    {{if .Flash}}<p class="msg">{{.Flash}}</p>{{end}}
+  </section>
+
+  {{if and .Online .AgentErr}}
+  <section class="card">
+    <h2>System</h2>
+    <p class="muted">{{.AgentErr}} — retrying on the next refresh.</p>
+  </section>
+  {{end}}
+
+  {{if and .Online .StatsOK}}
+  <section class="card">
+    <h2>System</h2>
+    <div class="stat-grid">
+      <div class="stat"><span class="k">Uptime</span><span class="v">{{uptime .Sys.UptimeSec}}</span></div>
+      <div class="stat"><span class="k">Load (1/5/15)</span><span class="v">{{printf "%.2f" .Sys.Load1}} / {{printf "%.2f" .Sys.Load5}} / {{printf "%.2f" .Sys.Load15}}</span></div>
+      <div class="stat">
+        <span class="k">Memory</span>
+        <span class="bar"><div style="width:{{if .Sys.MemTotalMB}}{{div100 .Sys.MemUsedMB .Sys.MemTotalMB}}%{{end}}"></div></span>
+        <span class="v">{{gb .Sys.MemUsedMB}} / {{gb .Sys.MemTotalMB}} GB</span>
+      </div>
+      {{range .Sys.GPUs}}
+      <div class="stat">
+        <span class="k">GPU {{.Index}} · {{.Name}}</span>
+        <span class="v">{{.UtilPct}}% · {{gb .MemUsedMB}}/{{gb .MemTotalMB}} GB · {{.TempC}}°C</span>
+      </div>
+      {{end}}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Services</h2>
+    <div class="service-list">
+      {{range .Services}}{{template "service" .}}{{end}}
+    </div>
+  </section>
+  {{end}}
+
+  {{if .Online}}
+  <section class="card">
+    <h2>Model</h2>
+    <p id="loaded-chip" class="muted">{{if .Loaded}}Loaded: {{.Loaded.ID}}{{else}}No model loaded{{end}}</p>
+    {{if .ModelErr}}<p class="msg">{{.ModelErr}}</p>{{end}}
+    {{if .Models}}
+    <form method="post" action="/desktop/models/load" class="btn-row">
+      <select class="select" name="model">
+        {{range .Models}}
+        <option value="{{.ID}}" {{if eq .ID $.Loaded.ID}}selected{{end}}>{{.ID}}{{with .Quantization}} ({{.}}){{end}}{{if eq .State "loaded"}} — loaded{{end}}</option>
+        {{end}}
+      </select>
+      <button class="btn primary">Load selected</button>
+    </form>
+    <form method="post" action="/desktop/models/unload">
+      <button class="btn">Unload current</button>
+    </form>
+    {{end}}
+  </section>
+  {{end}}
+
+  <section class="card">
+    <h2>Links</h2>
+    <div class="link-list">
+      {{range .Links}}
+      <div class="link-row {{if .State}}state-{{.State}}{{end}}">
+        <a href="{{.Href}}" target="_blank" rel="noopener">{{.Name}}</a>
+        {{if .State}}<span class="badge state-{{.State}}">{{stateLabel .State}}</span>{{end}}
+      </div>
+      {{end}}
+    </div>
+    {{if .SSH}}<p class="muted ssh">{{.SSH}}</p>{{end}}
+  </section>
+</main>
+
+<form method="post" action="/logout" style="text-align:center;padding:0 0 1.5rem">
+  <button style="background:none;border:none;color:var(--muted);font-size:.85rem">log out</button>
+</form>
+</body>
+</html>
+{{end}}
+
+{{define "service"}}
+<div class="service state-{{.State}}">
+  <div class="service-head">
+    <span class="sname">{{.Name}}</span>
+    <span class="badge state-{{.State}}">{{stateLabel .State}}</span>
+  </div>
+  {{with .Hint}}<p class="hint">{{.}}</p>{{end}}
+  <div class="btn-row">
+    <form method="post" action="/desktop/services/{{.ID}}/start">
+      <button class="btn small" {{if not .CanStart}}disabled{{end}}>Start</button>
+    </form>
+    <form method="post" action="/desktop/services/{{.ID}}/stop">
+      <button class="btn small" {{if not .CanStop}}disabled{{end}}>Stop</button>
+    </form>
+  </div>
+</div>
+{{end}}

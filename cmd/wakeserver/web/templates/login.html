@@ -1,0 +1,24 @@
+{{define "login"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Waker</title>
+<meta name="theme-color" content="#0b0f14">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="gate-root">
+<div class="gate-box">
+  <h2>Waker</h2>
+  <p class="muted">Enter the access token from your waker config.</p>
+  {{if .Bad}}<p class="msg">Token rejected — it must match <code>token:</code> in server.yaml.</p>{{end}}
+  <form method="post" action="/login">
+    <input id="token-input" type="password" name="token" placeholder="access token" autocomplete="off" spellcheck="false">
+    <button class="btn primary">Unlock</button>
+  </form>
+</div>
+</body>
+</html>
+{{end}}

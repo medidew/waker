@@ -1,7 +1,6 @@
 // Package lmstudio talks to a local LM Studio instance over its HTTP API.
 // All operations require the server to be running; there is deliberately no
-// lms CLI fallback, because CLI commands can start the daemon as a side
-// effect — a passive model-list poll must never resurrect services.
+// lms CLI fallback, because CLI commands can inadvertedly start the daemon.
 package lmstudio
 
 import (
@@ -14,26 +13,12 @@ import (
 	"time"
 )
 
-// Client targets the local LM Studio server.
 type Client struct {
 	base  string
 	httpc *http.Client // short ops (model list): hard cap keeps polls snappy
 	slowc *http.Client // long ops (load/unload): bounded only by the request context
 }
 
-// New creates a client for the LM Studio server on localhost:port.
-func New(port int) *Client {
-	if port <= 0 {
-		port = 1234
-	}
-	return &Client{
-		base:  fmt.Sprintf("http://127.0.0.1:%d", port),
-		httpc: &http.Client{Timeout: 8 * time.Second},
-		slowc: &http.Client{}, // no Timeout: loading a big model can take minutes
-	}
-}
-
-// Model is one entry from LM Studio's model list.
 type Model struct {
 	ID           string `json:"id"`
 	Type         string `json:"type,omitempty"`
@@ -43,8 +28,19 @@ type Model struct {
 	MaxContext   int    `json:"max_context_length,omitempty"`
 }
 
+func New(port int) *Client {
+	if port <= 0 {
+		port = 1234
+	}
+	return &Client{
+		base:  fmt.Sprintf("http://127.0.0.1:%d", port),
+		httpc: &http.Client{Timeout: 8 * time.Second},
+		slowc: &http.Client{},
+	}
+}
+
 // Models lists available models via the local API. Returns an error if the
-// server is not reachable instead of falling back to the CLI.
+// server is not reachable.
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	var lastErr error
 	for _, path := range []string{"/api/v0/models", "/v1/models"} {
@@ -62,32 +58,38 @@ func (c *Client) modelsFromAPI(ctx context.Context, path string) ([]Model, error
 	if err != nil {
 		return nil, err
 	}
+
 	resp, err := c.httpc.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: status %d", path, resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: status %d", path, resp.StatusCode)
-	}
+
 	var wrap struct {
 		Data []Model `json:"data"`
 	}
 	if err := json.Unmarshal(body, &wrap); err == nil && len(wrap.Data) > 0 {
 		return wrap.Data, nil
 	}
+
 	var direct []Model
 	if err := json.Unmarshal(body, &direct); err == nil && len(direct) > 0 {
 		return direct, nil
 	}
+
 	return nil, fmt.Errorf("GET %s: unrecognized response shape", path)
 }
 
-// Load loads a model into the running server (POST /api/v1/models/load). The
+// Loads a model into the running lms server (POST /api/v1/models/load). The
 // endpoint stays open until loading finishes, so this uses the long-lived
 // client; the caller's context is the only bound.
 func (c *Client) Load(ctx context.Context, model string) error {

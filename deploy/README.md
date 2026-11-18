@@ -7,21 +7,24 @@ Everything runs over Tailscale; nothing is exposed publicly.
 
 ```sh
 cd waker
-go build -o dist/wakeserver ./cmd/wakeserver
-go build -o dist/wakeragent  ./cmd/wakeragent
+go build -o bin/wakeserver ./cmd/wakeserver
+go build -o bin/wakeragent  ./cmd/wakeragent
 # cross-compile if needed, e.g.: CGO_ENABLED=0 GOOS=linux go build ...
 ```
 
-The dashboard UI is embedded in `wakeserver` — one file to deploy.
+The dashboard UI is embedded in `wakeserver` — one file to deploy. It is
+rendered server-side (no JavaScript); the page self-refreshes with a
+`<meta http-equiv="refresh">` tag and every control is a plain form POST.
 
 ## Desktop (CachyOS)
 
-1. Copy the binary: `install -m755 dist/wakeragent ~/.local/bin/`
+1. Copy the binary: `install -m755 bin/wakeragent ~/.local/bin/`
 2. Create config from the example, set a real token:
    ```sh
    mkdir -p ~/.config/waker
    cp deploy/agent.yaml.example ~/.config/waker/agent.yaml
-   # edit: token (openssl rand -hex 16), lms_bin path if different
+   # edit: token (openssl rand -hex 16), the lms paths inside each service
+# command, and lmstudio_port if your server runs on a different port
    ```
 3. Install and start the user service:
    ```sh
@@ -37,7 +40,7 @@ set `listen: 0.0.0.0:8091` or an explicit address in the config.
 
 ## Always-on box
 
-1. Copy the binary: `sudo install -m755 dist/wakeserver /usr/local/bin/`
+1. Copy the binary: `sudo install -m755 bin/wakeserver /usr/local/bin/`
 2. Create config from the example, set a real token and the desktop's MAC:
    ```sh
    sudo mkdir -p /etc/waker
@@ -69,14 +72,45 @@ set `listen: 0.0.0.0:8091` or an explicit address in the config.
    `curl -X POST -H "Authorization: Bearer <token>" http://<box-tailnet-ip>:8090/api/wake`
 2. Watch the desktop boot; confirm it appears in `tailscale status`.
 3. Open the dashboard on your phone (same tailnet):
-   `http://<box-tailnet-ip>:8090`, enter the token once (stored locally).
+   `http://<box-tailnet-ip>:8090`, then enter the token on the `/login` form.
+   The server sets an HttpOnly `waker_auth` cookie so you're not re-prompted.
 
 ## Security notes
 
 - Both APIs require the shared bearer token and bind to the tailnet interface
   by default (`listen: auto`). Tailnet ACLs are your first gate; the token is
   defense-in-depth. Keep the token out of version control.
-- The dashboard stores the token in browser localStorage on each device.
+- The dashboard gates the UI with an HttpOnly `waker_auth` cookie (value = the
+  config token, compared in constant time) set by the `/login` form; there is
+  no separate session store. Non-browser clients keep using `Authorization: Bearer`.
+
+## Dashboard, link proxies, and the stream API
+
+The page at `/` is server-rendered and JavaScript-free: a dynamic
+`<meta http-equiv="refresh">` drives the reload cadence (`presence_interval`,
+shortened to 2 s while a wake or a service transition is in motion), and every
+action — wake, service start/stop, model load/unload — is a plain form POST
+that redirects back to a fresh render.
+
+`links:` entries that set a `proxy:` id resolve to a same-origin `/u/<id>/`
+route, a reverse proxy (HTTP plus a WebSocket tunnel) onto a `proxies:` target.
+The browser only ever talks to waker's own origin; waker's cookie and
+`Authorization` header are never forwarded to the target.
+
+- `target: desktop:<port>` chases the desktop's current tailnet IP — use it for
+  anything the agent runs locally (e.g. LM Studio on `:1234`).
+- Any other `target` is used verbatim (e.g. `https://…ts.net` domains).
+- A target bound to the desktop returns 503 while the desktop is offline.
+
+Note: a service UI that navigates to an *absolute* path (no `/u/<id>` prefix)
+leaves the proxy and goes straight to its real origin. LM Studio is fine with
+the prefix; Open WebUI and ComfyUI make such navigations, so treat those
+proxied links as best-effort — the direct ts.net URL still works as a
+fallback.
+
+For programmatic clients (curl today, the planned `wakerctl` TUI in
+PLAN.md §12), `GET /api/stream` emits the same payload the dashboard renders
+as `text/event-stream` frames roughly every 2 s.
 
 ## Troubleshooting
 

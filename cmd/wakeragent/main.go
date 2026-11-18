@@ -26,16 +26,12 @@ import (
 
 const defaultPort = 8091
 
-type lmConfig struct {
-	Port int `yaml:"port"` // LM Studio local server port
-}
-
 type config struct {
-	Listen         string             `yaml:"listen"`          // "" or "auto" → primary tailnet IP
-	Token          string             `yaml:"token"`           // shared bearer token
+	ListenAddress  string             `yaml:"listen"`          // "" or "auto" → primary tailnet IP
+	AuthToken      string             `yaml:"token"`           // shared bearer token
 	StartTimeout   time.Duration      `yaml:"start_timeout"`   // how long to wait for a service to come up
 	HealthInterval time.Duration      `yaml:"health_interval"` // how often running services are probed
-	LMStudio       lmConfig           `yaml:"lmstudio"`
+	LMStudioPort   int                `yaml:"lmstudio_port"`
 	Services       []agent.ServiceDef `yaml:"services"`
 }
 
@@ -59,7 +55,7 @@ func main() {
 		services[def.ID] = svc
 		ordered = append(ordered, svc)
 	}
-	lmsc := lmstudio.New(cfg.LMStudio.Port)
+	lmsc := lmstudio.New(cfg.LMStudioPort)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -136,13 +132,13 @@ func main() {
 	})
 
 	root := http.NewServeMux()
-	root.Handle("/api/", httpx.Auth(api, cfg.Token))
+	root.Handle("/api/", httpx.Auth(api, cfg.AuthToken))
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
 	})
 
-	addr, err := tailscale.ListenAddr(ctx, cfg.Listen, defaultPort)
+	addr, err := tailscale.ListenAddr(ctx, cfg.ListenAddress, defaultPort)
 	if err != nil {
 		log.Fatalf("wakeragent: %v", err)
 	}

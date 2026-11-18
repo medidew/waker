@@ -174,6 +174,7 @@ func processAlive(pid int) bool {
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.state == StateRunning || s.state == StateStarting {
+		s.mu.Unlock()
 		return nil // nothing to do
 	}
 	s.setStateLocked(StateStarting, "")
@@ -218,6 +219,7 @@ func (s *Service) waitUp(timeout time.Duration) {
 func (s *Service) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	if s.state == StateStopped || s.state == StateStopping {
+		s.mu.Unlock()
 		return nil // nothing to do
 	}
 	s.setStateLocked(StateStopping, "")
