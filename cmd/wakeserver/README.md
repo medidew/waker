@@ -1,0 +1,5 @@
+# wakeserver
+
+**Only edit `ui/` — never `web/`.** `ui/` is the dashboard front-end: the TypeScript source (`src/app.ts`), the HTML templates, `style.css`, the icon, the PWA manifest, and the local `tsc` toolchain (`package.json`, `package-lock.json`). Everything you'd change about how the UI looks or behaves lives in this one directory.
+
+`web/` is **build output, not source**: `scripts/build.sh` regenerates it from `ui/` on every build (the compiled `app.js` plus copies of the static assets) and it is exactly what `go:embed all:web` bakes into the binary — so it's gitignored, can be deleted at any time, and must not be edited by hand. Keeping the two apart also keeps `ui/node_modules/` out of the embed: if the TypeScript toolchain sat inside `web/`, the 30 MB compiler would ship inside the binary. (Because the package embeds `web/`, it can't even be *compiled* before that stage runs — `scripts/build.sh` orders it first, so on a fresh checkout build with the script, not a bare `go build`.)

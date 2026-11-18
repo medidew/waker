@@ -132,7 +132,7 @@ func main() {
 	})
 
 	root := http.NewServeMux()
-	root.Handle("/api/", httpx.Auth(api, cfg.AuthToken))
+	root.Handle("/api/", httpx.Auth(api, cfg.AuthToken, "")) // no cookie: agent auth is bearer-only
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))

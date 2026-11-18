@@ -7,32 +7,43 @@ import (
 	"testing"
 )
 
-// TestAuth pins the bearer-token gate: correct token passes through,
-// anything else 401s without touching next, and an empty token disables the
-// check entirely. A bare token (no "Bearer " prefix) still matches — the
-// check is a TrimPrefix compare, which is the existing behaviour.
+// TestAuth pins the token gate: correct token passes through (as a bearer
+// header or, when a cookie name is configured, as that cookie), anything
+// else 401s without touching next, and an empty token disables the check
+// entirely. A bare token (no "Bearer " prefix) still matches — the check is
+// a TrimPrefix compare, which is the existing behaviour. With no cookie
+// name configured, cookies are ignored.
 func TestAuth(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		token      string
+		cookieName string
 		header     string
+		cookie     string
 		wantCode   int
 		wantServed bool
 	}{
-		{"correct bearer", "sekret", "Bearer sekret", 200, true},
-		{"bare token also matches", "sekret", "sekret", 200, true},
-		{"wrong token", "sekret", "Bearer nope", 401, false},
-		{"missing header", "sekret", "", 401, false},
-		{"open (empty token) passes through", "", "", 200, true},
+		{"correct bearer", "sekret", "", "Bearer sekret", "", 200, true},
+		{"bare token also matches", "sekret", "", "sekret", "", 200, true},
+		{"wrong token", "sekret", "", "Bearer nope", "", 401, false},
+		{"missing header", "sekret", "", "", "", 401, false},
+		{"open (empty token) passes through", "", "", "", "", 200, true},
+		{"correct cookie", "sekret", "waker_auth", "", "sekret", 200, true},
+		{"wrong cookie", "sekret", "waker_auth", "", "nope", 401, false},
+		{"cookie ignored without a name", "sekret", "", "", "sekret", 401, false},
+		{"bearer wins over a wrong cookie", "sekret", "waker_auth", "Bearer sekret", "nope", 200, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			served := false
 			h := Auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				served = true
-			}), tc.token)
+			}), tc.token, tc.cookieName)
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
+			}
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: "waker_auth", Value: tc.cookie})
 			}
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, req)
@@ -49,7 +60,7 @@ func TestAuth(t *testing.T) {
 // TestAuthErrorBody pins the JSON error shape that agent and server 401s
 // carry.
 func TestAuthErrorBody(t *testing.T) {
-	h := Auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), "tok")
+	h := Auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), "tok", "")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

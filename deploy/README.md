@@ -5,16 +5,31 @@ Everything runs over Tailscale; nothing is exposed publicly.
 
 ## Build
 
+Prerequisite: Node.js ≥ 20 (for the single `tsc` pass that compiles the dashboard UI).
+
 ```sh
 cd waker
+scripts/build.sh          # gofmt + go vet + go test, then builds the UI (npm ci + tsc + asset copy into web/), then builds both into bin/
+```
+
+Or manually:
+
+```sh
+# web/ is pure build output, regenerated from ui/ (the front-end source):
+rm -rf cmd/wakeserver/web && mkdir cmd/wakeserver/web
+cp cmd/wakeserver/ui/style.css cmd/wakeserver/ui/icon.svg cmd/wakeserver/ui/manifest.webmanifest cmd/wakeserver/web/
+cp -r cmd/wakeserver/ui/templates cmd/wakeserver/web/
+npm ci --prefix cmd/wakeserver/ui
+npm run build --prefix cmd/wakeserver/ui    # compiles src/app.ts → web/app.js
 go build -o bin/wakeserver ./cmd/wakeserver
 go build -o bin/wakeragent  ./cmd/wakeragent
 # cross-compile if needed, e.g.: CGO_ENABLED=0 GOOS=linux go build ...
 ```
 
-The dashboard UI is embedded in `wakeserver` — one file to deploy. It is
-rendered server-side (no JavaScript); the page self-refreshes with a
-`<meta http-equiv="refresh">` tag and every control is a plain form POST.
+The dashboard UI is embedded in `wakeserver` — one file to deploy. It is a
+single TypeScript file compiled to one classic `app.js` (no browser
+dependencies, no framework); the page keeps a `<noscript>` self-refresh
+fallback and plain form POSTs, so it still works without JavaScript.
 
 ## Desktop (CachyOS)
 

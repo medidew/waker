@@ -5,17 +5,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Waker</title>
-<meta http-equiv="refresh" content="{{.RefreshSec}}">
+<noscript><meta http-equiv="refresh" content="{{.RefreshSec}}"></noscript>
 <meta name="theme-color" content="#0b0f14">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><img src="/icon.svg" alt="" width="26" height="26"><span>Waker</span></div>
-  <div class="pill {{if .Online}}online{{else}}offline{{end}}"><span class="dot"></span><span>{{.DesktopName}} · {{if .Online}}online{{else}}offline{{end}}</span></div>
+  <span id="stream-state" class="stream" hidden>stream disconnected</span>
+  <div id="presence-pill" class="pill {{if .Online}}online{{else}}offline{{end}}"><span class="dot"></span><span>{{.DesktopName}} · {{if .Online}}online{{else}}offline{{end}}</span></div>
 </header>
 
 <main>
@@ -25,24 +27,21 @@
       {{if .Online}}Desktop is awake.{{else if .Waking}}Waiting for the desktop to join the tailnet — {{mss .WakeSeconds}} in, can take up to ~2 minutes.{{else}}Sends a Wake-on-LAN packet and waits for it to come online.{{end}}
     </p>
     <form method="post" action="/wake">
-      <button class="wake-btn" {{if or .Online .Waking}}disabled{{end}}>
+      <button id="wake-btn" class="wake-btn" {{if or .Online .Waking}}disabled{{end}}>
         {{if .Online}}● Online{{else if .Waking}}Waking…{{else}}Wake desktop{{end}}
       </button>
     </form>
-    {{if .Flash}}<p class="msg">{{.Flash}}</p>{{end}}
+    <p id="flash" class="msg"{{if not .Flash}} hidden{{end}}>{{.Flash}}</p>
   </section>
 
-  {{if and .Online .AgentErr}}
-  <section class="card">
+  <section class="card" id="system-err-card" {{if not (and .Online .AgentErr)}}hidden{{end}}>
     <h2>System</h2>
-    <p class="muted">{{.AgentErr}} — retrying on the next refresh.</p>
+    <p id="agent-err-text" class="muted">{{.AgentErr}} — retrying on the next refresh.</p>
   </section>
-  {{end}}
 
-  {{if and .Online .StatsOK}}
-  <section class="card">
+  <section class="card" id="system-card" {{if not (and .Online .StatsOK)}}hidden{{end}}>
     <h2>System</h2>
-    <div class="stat-grid">
+    <div class="stat-grid" id="stat-grid">
       <div class="stat"><span class="k">Uptime</span><span class="v">{{uptime .Sys.UptimeSec}}</span></div>
       <div class="stat"><span class="k">Load (1/5/15)</span><span class="v">{{printf "%.2f" .Sys.Load1}} / {{printf "%.2f" .Sys.Load5}} / {{printf "%.2f" .Sys.Load15}}</span></div>
       <div class="stat">
@@ -59,38 +58,35 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="services-card" {{if not (and .Online .StatsOK)}}hidden{{end}}>
     <h2>Services</h2>
-    <div class="service-list">
+    <div class="service-list" id="service-list">
       {{range .Services}}{{template "service" .}}{{end}}
     </div>
   </section>
-  {{end}}
 
-  {{if .Online}}
-  <section class="card">
+  <section class="card" id="model-card" {{if not .Online}}hidden{{end}}>
     <h2>Model</h2>
     <p id="loaded-chip" class="muted">{{if .Loaded}}Loaded: {{.Loaded.ID}}{{else}}No model loaded{{end}}</p>
-    {{if .ModelErr}}<p class="msg">{{.ModelErr}}</p>{{end}}
-    {{if .Models}}
-    <form method="post" action="/desktop/models/load" class="btn-row">
-      <select class="select" name="model">
-        {{range .Models}}
-        <option value="{{.ID}}" {{if eq .ID $.Loaded.ID}}selected{{end}}>{{.ID}}{{with .Quantization}} ({{.}}){{end}}{{if eq .State "loaded"}} — loaded{{end}}</option>
-        {{end}}
-      </select>
-      <button class="btn primary">Load selected</button>
-    </form>
-    <form method="post" action="/desktop/models/unload">
-      <button class="btn">Unload current</button>
-    </form>
-    {{end}}
+    <p id="model-err" class="msg"{{if not .ModelErr}} hidden{{end}}>{{.ModelErr}}</p>
+    <div id="model-forms" {{if not .Models}}hidden{{end}}>
+      <form method="post" action="/desktop/models/load" class="btn-row">
+        <select class="select" id="model-select" name="model">
+          {{range .Models}}
+          <option value="{{.ID}}" {{if eq .ID $.Loaded.ID}}selected{{end}}>{{.ID}}{{with .Quantization}} ({{.}}){{end}}{{if eq .State "loaded"}} — loaded{{end}}</option>
+          {{end}}
+        </select>
+        <button class="btn primary">Load selected</button>
+      </form>
+      <form method="post" action="/desktop/models/unload">
+        <button class="btn">Unload current</button>
+      </form>
+    </div>
   </section>
-  {{end}}
 
   <section class="card">
     <h2>Links</h2>
-    <div class="link-list">
+    <div class="link-list" id="link-list">
       {{range .Links}}
       <div class="link-row {{if .State}}state-{{.State}}{{end}}">
         <a href="{{.Href}}" target="_blank" rel="noopener">{{.Name}}</a>
@@ -98,12 +94,12 @@
       </div>
       {{end}}
     </div>
-    {{if .SSH}}<p class="muted ssh">{{.SSH}}</p>{{end}}
+    <p id="ssh" class="muted ssh"{{if not .SSH}} hidden{{end}}>{{.SSH}}</p>
   </section>
 </main>
 
 <form method="post" action="/logout" style="text-align:center;padding:0 0 1.5rem">
-  <button style="background:none;border:none;color:var(--muted);font-size:.85rem">log out</button>
+  <button style="background:none;border:none;color:var(--muted);font-size:.85rem;text-decoration:underline">log out</button>
 </form>
 </body>
 </html>

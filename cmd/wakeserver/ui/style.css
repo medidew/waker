@@ -13,6 +13,10 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must win over component display rules (e.g. .ssh,
+   .btn-row) — the UI toggles it to show/hide sections in place. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -78,6 +82,9 @@ main {
 
 .muted { color: var(--muted); font-size: 0.9rem; }
 .hidden { display: none !important; }
+
+/* Stream state indicator (top bar; shown only while SSE is disconnected) */
+.stream { font-size: 0.75rem; color: var(--amber); margin-right: 10px; white-space: nowrap; }
 
 /* Wake button */
 .wake-btn {
@@ -188,8 +195,9 @@ main {
 .ssh { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .copy-btn { padding: 3px 10px; font-size: 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: #1a2436; color: var(--muted); cursor: pointer; }
 
-/* Token gate */
-.gate { position: fixed; inset: 0; background: rgba(7, 10, 15, 0.88); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; }
+/* Token gate: the login page is a standalone full-screen centering context */
+body.gate-root { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; }
 .gate-box { width: min(92vw, 340px); background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; display: grid; gap: 12px; }
+.gate-box form { display: grid; gap: 12px; }
 .gate-box h2 { margin: 0; font-size: 1.3rem; text-align: center; }
 .gate-box input { padding: 11px; border-radius: 9px; background: #0e1520; border: 1px solid var(--border); color: var(--text); font-size: 0.95rem; }

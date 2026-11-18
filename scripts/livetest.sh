@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Live smoke test for wakeragent and wakeserver: builds both, starts each on a
 # free 127.0.0.1 port with throwaway configs, exercises the real HTTP API, and
-# verifies Wake-on-LAN magic packets end to end over loopback.
+# verifies Wake-on-LAN magic packets end to end over loopback. A fully green
+# run leaves the dashboard server running (log streamed to the terminal) for
+# manual UI testing; Ctrl+C / SIGINT stops it and removes the temp files.
 #
 # Usage: scripts/livetest.sh [all|server|agent]   (default: all)
 set -euo pipefail
@@ -49,13 +51,61 @@ wait_http() {
 	return 1
 }
 
+# hold_and_wait <pid> <dir> <log> <url> <token> — leaves a passing server up
+# for manual testing: streams its log to the terminal and blocks until
+# SIGINT/SIGTERM (or the server dying) stops it and removes the temp dir.
+hold_and_wait() {
+	local pid=$1 dir=$2 log=$3 url=$4 token=$5
+
+	echo
+	echo "all checks passed — leaving the dashboard running for manual testing"
+	echo "  url:   $url"
+	echo "  token: $token"
+	echo "server log follows (Ctrl+C / SIGINT stops the server and cleans up):"
+
+	local tail_pid
+	tail -n +1 -f "$log" &
+	tail_pid=$!
+
+	local done_flag=""
+	cleanup_hold() {
+		trap - INT TERM
+		[ -n "$done_flag" ] && return
+		done_flag=1
+		# let the server finish shutting down first, so the streamed log
+		# captures its final lines, then stop the tail and clean up
+		kill -INT "$pid" 2>/dev/null || true
+		local i
+		for i in $(seq 1 20); do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 0.1
+		done
+		kill -TERM "$pid" 2>/dev/null || true
+		kill "$tail_pid" 2>/dev/null || true
+		rm -rf "$dir"
+		echo
+		echo "server stopped, temp files removed."
+	}
+	trap 'cleanup_hold; exit 0' INT TERM
+
+	# Poll until the server is gone rather than using `wait`: a terminal
+	# Ctrl+C hits the whole foreground group, the server's own handler shuts
+	# it down, and this loop notices — which also covers parents (non-
+	# interactive shells) whose background children inherit SIGINT ignored,
+	# where the INT trap above cannot fire.
+	while kill -0 "$pid" 2>/dev/null; do
+		sleep 0.5
+	done
+	cleanup_hold
+}
+
 # ---------------------------------------------------------------------------
 # wakeserver smoke test
 # ---------------------------------------------------------------------------
 test_server() {
 	echo "== wakeserver =="
 	local dir; dir=$(mktemp -d)
-	local token="waker-test-token-$$"
+	local token="waker-test-token"
 	local port; port=$(free_port 18090)
 	local B="http://127.0.0.1:$port"
 
@@ -134,14 +184,24 @@ EOF
 		"curl -s -o /dev/null -w '%{redirect_url}' -X POST -d 'token=wrong' \"\$B/login\" | grep -q '/login?bad=1'"
 	check "correct token sets the waker_auth cookie" \
 		"curl -s -D - -o /dev/null -X POST -d \"token=\$TOKEN\" \"\$B/login\" | grep -i 'set-cookie' | grep -q 'waker_auth'"
-	check "authenticated / renders with meta refresh" \
-		"curl -s -H \"Cookie: waker_auth=\$TOKEN\" \"\$B/\" | grep -q 'http-equiv=\"refresh\"'"
+	check "page wires app.js and keeps a no-JS refresh fallback" \
+		"curl -s -H \"Cookie: waker_auth=\$TOKEN\" \"\$B/\" | grep -q '<script src=\"/app.js\"' && curl -s -H \"Cookie: waker_auth=\$TOKEN\" \"\$B/\" | grep -q '<noscript><meta http-equiv=\"refresh\"'"
 	check "bearer header authenticates the page too" \
 		"curl -s -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer \$TOKEN\" \"\$B/\" | grep -q 200"
 	check "API status requires auth" \
 		"curl -s -o /dev/null -w '%{http_code}' \"\$B/api/status\" | grep -q 401"
 	check "API status with bearer lists configured links" \
 		"curl -s -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/status\" | grep -q '\"proxy\":' "
+	check "the waker_auth cookie authenticates /api/ too" \
+		"curl -s -H \"Cookie: waker_auth=\$TOKEN\" \"\$B/api/status\" | grep -q '\"proxy\":' "
+	check "service action API 503s with JSON error when offline" \
+		"curl -s -o /dev/null -w '%{http_code}' -X POST -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/services/demo/start\" | grep -q 503 && curl -s -X POST -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/services/demo/start\" | grep -q '\"error\"'"
+	check "service action API rejects unknown actions" \
+		"curl -s -o /dev/null -w '%{http_code}' -X POST -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/services/demo/bogus\" | grep -q 400"
+	check "model load API 503s with JSON error when offline" \
+		"curl -s -o /dev/null -w '%{http_code}' -X POST -H \"Authorization: Bearer \$TOKEN\" -d '{\"model\":\"x\"}' \"\$B/api/models/load\" | grep -q 503 && curl -s -X POST -H \"Authorization: Bearer \$TOKEN\" -d '{\"model\":\"x\"}' \"\$B/api/models/load\" | grep -q '\"error\"'"
+	check "model unload API 503s with JSON error when offline" \
+		"curl -s -o /dev/null -w '%{http_code}' -X POST -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/models/unload\" | grep -q 503 && curl -s -X POST -H \"Authorization: Bearer \$TOKEN\" \"\$B/api/models/unload\" | grep -q '\"error\"'"
 	check "desktop-bound proxy target 503s while offline" \
 		"curl -s -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer \$TOKEN\" \"\$B/u/desktop-ui/\" | grep -q 503"
 	check "unknown proxy id 404s" \
@@ -154,9 +214,17 @@ EOF
 		"timeout 2 curl -s -o /dev/null -w '%{http_code}' -N \"\$B/api/stream\" | grep -q 401"
 	check "static assets are served" \
 		"curl -s -o /dev/null -w '%{http_code}' \"\$B/style.css\" | grep -q 200 && curl -s -o /dev/null -w '%{http_code}' \"\$B/manifest.webmanifest\" | grep -q 200"
+	check "app.js serves as JavaScript" \
+		"curl -s -o /dev/null -w '%{http_code}' \"\$B/app.js\" | grep -q 200 && curl -s -o /dev/null -w '%{content_type}' \"\$B/app.js\" | grep -q 'javascript'"
 
-	kill "$SRV_PID" "$WOL_PID" 2>/dev/null || true
-	rm -rf "$dir"
+	# Hand the server off to main: with every check green it stays running
+	# for manual UI testing (hold_and_wait); on any failure main cleans up.
+	HOLD_PID=$SRV_PID
+	HOLD_WOL=$WOL_PID
+	HOLD_DIR=$dir
+	HOLD_LOG="$dir/wakeserver.log"
+	HOLD_URL=$B
+	HOLD_TOKEN=$token
 }
 
 # ---------------------------------------------------------------------------
@@ -256,4 +324,18 @@ esac
 
 echo
 echo "== $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
+
+if [ "$FAIL" -ne 0 ]; then
+	# failure path: never leave a failing server behind
+	if [ -n "${HOLD_PID:-}" ]; then
+		kill "$HOLD_PID" 2>/dev/null || true
+		[ -n "${HOLD_WOL:-}" ] && kill "$HOLD_WOL" 2>/dev/null || true
+		rm -rf "$HOLD_DIR" 2>/dev/null
+	fi
+	exit 1
+fi
+
+if [ -n "${HOLD_PID:-}" ]; then
+	hold_and_wait "$HOLD_PID" "$HOLD_DIR" "$HOLD_LOG" "$HOLD_URL" "$HOLD_TOKEN"
+fi
+exit 0

@@ -44,6 +44,14 @@ const (
 //go:embed all:web
 var webFS embed.FS
 
+// appJS is a hard build requirement: a single-file embed pattern that
+// matches nothing is a compile error, so a wakeserver binary can never be
+// built (or shipped) without the compiled dashboard UI. It exists so the
+// all:web directory embed above cannot silently omit app.js.
+//
+//go:embed web/app.js
+var appJS embed.FS
+
 var pageTmpl *template.Template
 
 // tmplFuncs keeps the presentation helpers out of the templates themselves.
@@ -220,14 +228,17 @@ func main() {
 
 	api := http.NewServeMux()
 	api.HandleFunc("POST /api/wake", s.handleWake)
+	api.HandleFunc("POST /api/services/{id}/{action}", s.handleServiceAPI)
+	api.HandleFunc("POST /api/models/load", s.handleModelLoadAPI)
+	api.HandleFunc("POST /api/models/unload", s.handleModelUnloadAPI)
 	api.HandleFunc("GET /api/status", s.handleStatus)
 	api.HandleFunc("GET /api/stream", s.handleStream)
 	api.Handle("/api/desktop/", s.proxy())
 
 	fileServer := http.FileServer(http.FS(webSub))
 	root := http.NewServeMux()
-	root.Handle("/api/", httpx.Auth(api, cfg.Token))
-	root.HandleFunc("/", s.handlePage) // catch-all subtree: serves the page on any method
+	root.Handle("/api/", httpx.Auth(api, cfg.Token, "waker_auth")) // bearer (wakerctl) or the page's HttpOnly cookie
+	root.HandleFunc("/", s.handlePage)                             // catch-all subtree: serves the page on any method
 	root.HandleFunc("GET /login", s.handleLogin)
 	root.HandleFunc("POST /login", s.handleLoginPost)
 	root.HandleFunc("POST /logout", s.handleLogout)
@@ -239,6 +250,7 @@ func main() {
 	root.Handle("/style.css", fileServer)
 	root.Handle("/icon.svg", fileServer)
 	root.Handle("/manifest.webmanifest", fileServer)
+	root.Handle("/app.js", fileServer)
 
 	addr, err := tailscale.ListenAddr(ctx, cfg.Listen, defaultPort)
 	if err != nil {
@@ -303,7 +315,7 @@ func (s *server) handleWake(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, map[string]any{"ok": true, "waking": true, "started_at": started})
 }
 
-// handleWakeForm is the zero-JS wake button: act, flash on error, redirect.
+// handleWakeForm is the no-JS wake button: act, flash on error, redirect.
 func (s *server) handleWakeForm(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Token != "" && !s.authed(r) {
 		httpx.WriteErr(w, http.StatusUnauthorized, "missing or invalid token")
@@ -442,7 +454,37 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// handleServiceForm is the zero-JS start/stop button: proxy the action to
+// errOffline is the shared "desktop is offline" sentinel: the form handlers
+// flash it, the /api/ twins map it to 503.
+var errOffline = errors.New("desktop is offline")
+
+// serviceAction / modelLoadAction / modelUnloadAction are the shared cores
+// of the start/stop and load/unload endpoints (offline check + agent call).
+// The form handlers flash the error and redirect (the no-JS path); the
+// /api/ twins answer with JSON for the dashboard UI.
+func (s *server) serviceAction(ctx context.Context, id, action string) error {
+	if !s.tracker.Online() || s.tracker.IP() == "" {
+		return errOffline
+	}
+	return s.agentDo(ctx, fmt.Sprintf("/api/services/%s/%s", url.PathEscape(id), action), nil)
+}
+
+func (s *server) modelLoadAction(ctx context.Context, model string) error {
+	if !s.tracker.Online() || s.tracker.IP() == "" {
+		return errOffline
+	}
+	body, _ := json.Marshal(map[string]string{"model": model})
+	return s.agentDo(ctx, "/api/models/load", strings.NewReader(string(body)))
+}
+
+func (s *server) modelUnloadAction(ctx context.Context) error {
+	if !s.tracker.Online() || s.tracker.IP() == "" {
+		return errOffline
+	}
+	return s.agentDo(ctx, "/api/models/unload", nil)
+}
+
+// handleServiceForm is the no-JS start/stop button: proxy the action to
 // the agent, flash any error, redirect back to a fresh render.
 func (s *server) handleServiceForm(w http.ResponseWriter, r *http.Request) {
 	if !s.authed(r) {
@@ -454,13 +496,7 @@ func (s *server) handleServiceForm(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusBadRequest, "action must be start or stop")
 		return
 	}
-	if !s.tracker.Online() || s.tracker.IP() == "" {
-		s.setErr("desktop is offline")
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
-	id := url.PathEscape(r.PathValue("id"))
-	if err := s.agentDo(r.Context(), fmt.Sprintf("/api/services/%s/%s", id, action), nil); err != nil {
+	if err := s.serviceAction(r.Context(), r.PathValue("id"), action); err != nil {
 		s.setErr(err.Error())
 	} else {
 		s.markAction()
@@ -482,13 +518,7 @@ func (s *server) handleModelLoadForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	if !s.tracker.Online() || s.tracker.IP() == "" {
-		s.setErr("desktop is offline")
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
-	body, _ := json.Marshal(map[string]string{"model": model})
-	if err := s.agentDo(r.Context(), "/api/models/load", strings.NewReader(string(body))); err != nil {
+	if err := s.modelLoadAction(r.Context(), model); err != nil {
 		s.setErr(err.Error())
 	} else {
 		s.markAction()
@@ -501,17 +531,56 @@ func (s *server) handleModelUnloadForm(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusUnauthorized, "missing or invalid token")
 		return
 	}
-	if !s.tracker.Online() || s.tracker.IP() == "" {
-		s.setErr("desktop is offline")
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
-	if err := s.agentDo(r.Context(), "/api/models/unload", nil); err != nil {
+	if err := s.modelUnloadAction(r.Context()); err != nil {
 		s.setErr(err.Error())
 	} else {
 		s.markAction()
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// handleServiceAPI / handleModelLoadAPI / handleModelUnloadAPI are the JSON
+// twins of the form handlers: the dashboard UI fetches them and applies the
+// result in place, so no page navigation happens. Auth comes from the /api/
+// wrapper (bearer or the waker_auth cookie).
+func (s *server) handleServiceAPI(w http.ResponseWriter, r *http.Request) {
+	action := r.PathValue("action")
+	if action != "start" && action != "stop" {
+		httpx.WriteErr(w, http.StatusBadRequest, "action must be start or stop")
+		return
+	}
+	s.finishAction(w, s.serviceAction(r.Context(), r.PathValue("id"), action))
+}
+
+func (s *server) handleModelLoadAPI(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Model == "" {
+		httpx.WriteErr(w, http.StatusBadRequest, "no model selected")
+		return
+	}
+	s.finishAction(w, s.modelLoadAction(r.Context(), in.Model))
+}
+
+func (s *server) handleModelUnloadAPI(w http.ResponseWriter, r *http.Request) {
+	s.finishAction(w, s.modelUnloadAction(r.Context()))
+}
+
+// finishAction maps an action's result to the JSON the UI expects: 200
+// {"ok":true} on success, 503 when the desktop is offline, 502 when the
+// agent refused or failed the action.
+func (s *server) finishAction(w http.ResponseWriter, err error) {
+	if err == nil {
+		s.markAction()
+		httpx.WriteJSON(w, map[string]any{"ok": true})
+		return
+	}
+	code := http.StatusBadGateway
+	if errors.Is(err, errOffline) {
+		code = http.StatusServiceUnavailable
+	}
+	httpx.WriteErr(w, code, err.Error())
 }
 
 // ---------- /u/<id>/ link proxy: service UIs behind the wakeserver origin ----------
@@ -663,8 +732,9 @@ func isWebSocketUpgrade(r *http.Request) bool {
 }
 
 // handleStream pushes the same payload the page renders, for stream-capable
-// clients (the wakerctl TUI, any native app). EventSource needs JS, so the
-// zero-JS page does not consume this — it uses the dynamic meta refresh.
+// clients (the wakerctl TUI, any native app). The dashboard UI (app.js)
+// consumes this over EventSource; the no-JS fallback instead uses the
+// dynamic meta refresh.
 func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {

@@ -1,0 +1,15 @@
+{
+  "name": "waker-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build tooling for the waker dashboard UI: one TypeScript file compiled to app.js, which is go:embedded into the wakeserver binary. No runtime dependencies, no bundler.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc src/app.ts --outDir ../web --target es2020 --module es2020 --lib es2020,dom --strict --noEmitOnError"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
